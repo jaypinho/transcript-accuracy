@@ -14,6 +14,7 @@ import streamlit as st
 import openai
 from openai.embeddings_utils import cosine_similarity
 import pandas as pd
+import statistics
 
 
 # INPUT: A YouTube video ID
@@ -305,15 +306,19 @@ def how_it_works():
 
         **Acknowledgments**
 
-        Previous work in this and related areas:
+        Please refer to previous work by researchers and practitioners in this and related areas:
 
         - [On the Use of Information Retrieval Measures for Speech Recognition Evaluation](https://www.researchgate.net/publication/37433359_On_the_Use_of_Information_Retrieval_Measures_for_Speech_Recognition_Evaluation)
         - [Word Error Rate Estimation for Speech Recognition: e-WER](https://aclanthology.org/P18-2004.pdf)
+        - [What is Word Error Rate (WER)?](https://deepgram.com/learn/what-is-word-error-rate)
+        - [The Trouble with Word Error Rate (WER)](https://deepgram.com/learn/the-trouble-with-wer)
+        - [Measuring Quality: Word Error Rate Explained](https://deepgram.com/learn/measuring-quality-word-error-rate-explained)
         - [Semantic Distance: A New Metric for ASR Performance Analysis Towards Spoken Language Understanding](https://arxiv.org/pdf/2104.02138.pdf)
         - [Evaluating User Perception of Speech Recognition System Quality with Semantic Distance Metric](https://arxiv.org/pdf/2110.05376.pdf)
 
+        <br/>
         I would also like to thank the team at Deepgram for engaging helpfully on this topic in their Discord.
-        
+
         Any errors, mistakes, bugs, or incorrect statements are my own.
     """
 
@@ -362,7 +367,7 @@ def demo_streamlit_app():
 
         with main_body:
             body_container = st.container()
-            col1, col2, col3 = body_container.columns(3)
+            col1, col2, col3, col4 = body_container.columns(4)
             with st.expander('**How It Works**', expanded=False):
                 st.markdown(how_it_works(), unsafe_allow_html=True)
             loading_spinner_container = st.empty()
@@ -388,17 +393,20 @@ def demo_streamlit_app():
                         col1.metric(label="Total Words", value=f"{locale.format_string('%d', len(normalized_text1.split(' ')), grouping=True)}")
                         col2.metric(label="WER", value=f"0%")
                         col3.metric(label="Distinct Error Sections", value="0")
+                        col4.metric(label="Median Error Pair Similarity", value="N/A")
                         body_container.write('**The two normalized transcripts are identical.**')
                         st.stop()
 
                 with st.spinner('Comparing the transcripts...'):
 
                     segments = compare_texts(normalized_text1, normalized_text2, model='jiwer', buffer=st.session_state['error_padding_words'])
+                    all_errors = [x for x in segments['grouped_segments'] if 'cosine_similarity' in x]
+
                     locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
                     col1.metric(label="Total Words", value=f"{locale.format_string('%d', len(segments['alignments'].references[0]), grouping=True)}")
                     col2.metric(label="WER", value=f"{round(segments['alignments'].wer*100,2)}%")
                     col3.metric(label="Distinct Error Sections", value=f"{len([x for x in segments['grouped_segments'] if 'cosine_similarity' in x])}")
-                    all_errors = [x for x in segments['grouped_segments'] if 'cosine_similarity' in x]
+                    col4.metric(label="Median Error Pair Similarity", value=round(statistics.median([x['cosine_similarity'] for x in all_errors]), 4))
                     worst_offenders = [{'Truth Set': f"{x['baseline_snippet_pre']} <strong style='color:red;'>{x['baseline_snippet']}</strong> {x['baseline_snippet_post']}", 'Error': f"{x['comparison_snippet_pre']} <strong style='color:red;'>{x['comparison_snippet']}</strong> {x['comparison_snippet_post']}", 'Similarity Score': x['cosine_similarity']} for x in sorted(all_errors, key=lambda x: x['cosine_similarity'])[:20]]
                     df = pd.DataFrame.from_dict(worst_offenders)
                     with worst_offenders_container:
