@@ -7,3 +7,4 @@ num2words==0.5.12
 openai==0.27.8
 openai-whisper==20230314
 pandas==2.0.3
+matplotlib==3.7.2
