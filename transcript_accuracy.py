@@ -251,6 +251,12 @@ def fill_example_transcripts(default_gold_standard, default_asr):
     if st.session_state['example_transcripts'] == 'Default short text':
         st.session_state['gold_standard_transcript'] = default_gold_standard
         st.session_state['asr_transcript'] = default_asr
+    elif st.session_state['example_transcripts'] == '2023 U.S. State of the Union speech (NYT vs. Transcribe by AWS)':
+        st.session_state['gold_standard_transcript'] = open('sotu_2023_transcript_nyt.txt', 'r').read()
+        st.session_state['asr_transcript'] = open('sotu_2023_aws.txt', 'r').read()
+    elif st.session_state['example_transcripts'] == '2023 U.S. State of the Union speech (NYT vs. Speech-to-Text/Chirp by Google)':
+        st.session_state['gold_standard_transcript'] = open('sotu_2023_transcript_nyt.txt', 'r').read()
+        st.session_state['asr_transcript'] = open('sotu_2023_google.txt', 'r').read()
     elif st.session_state['example_transcripts'] == '2023 U.S. State of the Union speech (NYT vs. whisper-medium-en by OpenAI)':
         st.session_state['gold_standard_transcript'] = open('sotu_2023_transcript_nyt.txt', 'r').read()
         st.session_state['asr_transcript'] = open('sotu_2023_transcript_whisper_medium_en.txt', 'r').read()
@@ -263,12 +269,24 @@ def fill_example_transcripts(default_gold_standard, default_asr):
     elif st.session_state['example_transcripts'] == '2023 U.S. State of the Union speech (NYT vs. Nova by Deepgram)':
         st.session_state['gold_standard_transcript'] = open('sotu_2023_transcript_nyt.txt', 'r').read()
         st.session_state['asr_transcript'] = open('sotu_2023_transcript_nova.txt', 'r').read()
+    elif st.session_state['example_transcripts'] == 'The Bee Movie (2007) dialogue (gold standard vs. Transcribe by AWS)':
+        st.session_state['gold_standard_transcript'] = open('bee_movie_gold_standard.txt', 'r').read()
+        st.session_state['asr_transcript'] = open('bee_movie_aws.txt', 'r').read()
+    elif st.session_state['example_transcripts'] == 'The Bee Movie (2007) dialogue (gold standard vs. Speech-to-Text/Chirp by Google)':
+        st.session_state['gold_standard_transcript'] = open('bee_movie_gold_standard.txt', 'r').read()
+        st.session_state['asr_transcript'] = open('bee_movie_google.txt', 'r').read()
     elif st.session_state['example_transcripts'] == 'The Bee Movie (2007) dialogue (gold standard vs. whisper-large-v2 by OpenAI)':
         st.session_state['gold_standard_transcript'] = open('bee_movie_gold_standard.txt', 'r').read()
         st.session_state['asr_transcript'] = open('bee_movie_whisper_large-v2.txt', 'r').read()
     elif st.session_state['example_transcripts'] == 'The Bee Movie (2007) dialogue (gold standard vs. Nova by Deepgram)':
         st.session_state['gold_standard_transcript'] = open('bee_movie_gold_standard.txt', 'r').read()
         st.session_state['asr_transcript'] = open('bee_movie_nova.txt', 'r').read()
+    elif st.session_state['example_transcripts'] == 'Alphabet FY23 Q2 Earnings Call (gold standard vs. Transcribe by AWS)':
+        st.session_state['gold_standard_transcript'] = open('alphabet_earnings_gold_standard.txt', 'r').read()
+        st.session_state['asr_transcript'] = open('alphabet_earnings_aws.txt', 'r').read()
+    elif st.session_state['example_transcripts'] == 'Alphabet FY23 Q2 Earnings Call (gold standard vs. Speech-to-Text/Chirp by Google)':
+        st.session_state['gold_standard_transcript'] = open('alphabet_earnings_gold_standard.txt', 'r').read()
+        st.session_state['asr_transcript'] = open('alphabet_earnings_google.txt', 'r').read()
     elif st.session_state['example_transcripts'] == 'Alphabet FY23 Q2 Earnings Call (gold standard vs. Nova by Deepgram)':
         st.session_state['gold_standard_transcript'] = open('alphabet_earnings_gold_standard.txt', 'r').read()
         st.session_state['asr_transcript'] = open('alphabet_earnings_nova.txt', 'r').read()
@@ -345,7 +363,23 @@ def demo_streamlit_app():
 
     with sidebar:
 
-        st.selectbox('Choose sample transcripts to compare', ('Default short text', '2023 U.S. State of the Union speech (NYT vs. whisper-medium-en by OpenAI)', '2023 U.S. State of the Union speech (NYT vs. whisper-small-en by OpenAI)', '2023 U.S. State of the Union speech (NYT vs. whisper-tiny-en by OpenAI)', '2023 U.S. State of the Union speech (NYT vs. Nova by Deepgram)', 'The Bee Movie (2007) dialogue (gold standard vs. whisper-large-v2 by OpenAI)', 'The Bee Movie (2007) dialogue (gold standard vs. Nova by Deepgram)', 'Alphabet FY23 Q2 Earnings Call (gold standard vs. Nova by Deepgram)', 'Alphabet FY23 Q2 Earnings Call (gold standard vs. whisper-small-en by OpenAI)'), index=0, key='example_transcripts', help='Select a gold-standard transcript and an ASR transcript to compare it to', on_change=fill_example_transcripts, kwargs={'default_gold_standard': default_gold_standard_text, 'default_asr': default_asr_text}, disabled=False, label_visibility="visible")
+        st.selectbox('Choose sample transcripts to compare', (
+            'Default short text',
+            '2023 U.S. State of the Union speech (NYT vs. Transcribe by AWS)',
+            '2023 U.S. State of the Union speech (NYT vs. Speech-to-Text/Chirp by Google)',
+            '2023 U.S. State of the Union speech (NYT vs. whisper-medium-en by OpenAI)',
+            '2023 U.S. State of the Union speech (NYT vs. whisper-small-en by OpenAI)',
+            '2023 U.S. State of the Union speech (NYT vs. whisper-tiny-en by OpenAI)',
+            '2023 U.S. State of the Union speech (NYT vs. Nova by Deepgram)',
+            'The Bee Movie (2007) dialogue (gold standard vs. Transcribe by AWS)',
+            'The Bee Movie (2007) dialogue (gold standard vs. Speech-to-Text/Chirp by Google)',
+            'The Bee Movie (2007) dialogue (gold standard vs. whisper-large-v2 by OpenAI)',
+            'The Bee Movie (2007) dialogue (gold standard vs. Nova by Deepgram)',
+            'Alphabet FY23 Q2 Earnings Call (gold standard vs. Transcribe by AWS)',
+            'Alphabet FY23 Q2 Earnings Call (gold standard vs. Speech-to-Text/Chirp by Google)',
+            'Alphabet FY23 Q2 Earnings Call (gold standard vs. Nova by Deepgram)',
+            'Alphabet FY23 Q2 Earnings Call (gold standard vs. whisper-small-en by OpenAI)'
+            ), index=0, key='example_transcripts', help='Select a gold-standard transcript and an ASR transcript to compare it to', on_change=fill_example_transcripts, kwargs={'default_gold_standard': default_gold_standard_text, 'default_asr': default_asr_text}, disabled=False, label_visibility="visible")
         with st.form('transcript-form'):
             # gold_standard_transcript = st.text_area('Paste the gold standard transcript here', value=open('sotu_2023_transcript_nyt.txt', 'r').read(), height=400)
             # asr_transcript = st.text_area('Paste the ASR transcript here', value=open('sotu_2023_transcript_whisper_small_en.txt', 'r').read(), height=400)
