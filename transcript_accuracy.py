@@ -11,6 +11,7 @@ from annotated_text import annotated_text, annotation
 import locale
 from num2words import num2words
 import streamlit as st
+st.set_page_config(page_title='Transcript Accuracy Analyzer', layout="wide")
 import openai
 from openai.embeddings_utils import cosine_similarity
 import pandas as pd
@@ -325,7 +326,6 @@ def how_it_works():
 
 def demo_streamlit_app():
 
-    st.set_page_config(layout="wide")
     st.title('Transcript Accuracy Analyzer', help='Measure your automatic speech recognition (ASR) transcript against a gold standard version.')
     st.write('*Evaluating the semantic accuracy of automatic speech recognition (ASR) transcripts since August 2023. By [Jay Pinho](https://twitter.com/jaypinho).*')
 
