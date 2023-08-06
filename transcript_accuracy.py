@@ -89,7 +89,7 @@ def normalize_text(text_string, normalizations=['lower_case', 'standardize_numbe
     # Keep in mind that the order in which this array is processed REALLY matters, e.g. $800,000 could become $800000 which could become XXX (depending on how I set it up)
     text_replacements = {
         'expand_contractions': [[r'[’‘]', "'"]] + [[re.compile(fr"{k}", re.IGNORECASE), v] for k,v in contractions_dict.items()], # Expand contractions
-        'remove_punctuation': [[r'[\.,\'’‘\?!;:“”]', '']], # Remove punctuation
+        'remove_punctuation': [[r'[\.,\'’‘\?!;:"“”]', '']], # Remove punctuation
         'replace_hyphens': [[r'[-—–]', ' ']], # Replace hyphens with spaces
         'remove_spaces': [[r'\s+', ' ']] # Remove extra spaces
         # 'standardize_numbers': [[r'[$£]?\b\d+\b( dollars| pounds| percent|%)?', 'XXX']], # Ignore numbers
@@ -327,14 +327,15 @@ def demo_streamlit_app():
 
     st.set_page_config(layout="wide")
     st.title('Transcript Accuracy Analyzer', help='Measure your automatic speech recognition (ASR) transcript against a gold standard version.')
+    st.write('*Evaluating the semantic accuracy of automatic speech recognition (ASR) transcripts since August 2023. By [Jay Pinho](https://twitter.com/jaypinho).*')
 
     if 'run_comparison_automatically' not in st.session_state:
         st.session_state['run_comparison_automatically'] = True
 
     openai.api_key = st.secrets['openai_api_key']
 
-    default_gold_standard_text = 'She walked to the office on Twenty-Third Street.'
-    default_asr_text = 'She walked to office on 23rd street'
+    default_gold_standard_text = 'Welcome to the Transcript Accuracy Analyzer (TAA), your free automatic speech recognition (ASR) accuracy analyzer. In addition to reporting on the Word Error Rate (WER) of a given ASR transcript relative to a gold standard one, TAA uses vector embeddings to precisely measure the semantic similarity of the two transcripts, providing a more holistic understanding of an ASR transcript\'s overall quality.\n\nTo get started, paste in a pair of transcripts in these two text boxes or simply auto-fill them with sample transcripts from the dropdown box above.\n\nIf you\'re feeling adventurous, expand the advanced settings below the text boxes to play around with text normalization options.\n\nLastly, don\'t forget to expand the "How It Works" section to read up on the methodology.'
+    default_asr_text = 'Welcome to the Transcript Accuracy Analyzer, your free automatic speech recognition accuracy analyzer. In addition to reporting on the Word Error Rate of a given ASR transcript relative to a gold standard one, TAA uses vector embeddings to precisely measure the semantic similarity of the 2 transcripts, providing a more holistic understanding of a ASR transcript\'s overall quality.\n\nTo get started, paste in a pair of transcripts in these 2 text boxes or simply auto fill them with sample transcripts from the dropdown box above.\n\nIf you\'re feeling adventurous, expand the advanced settings below the text boxes to play around with text normalization options.\n\nLastly, don\'t forget to expand the How It Works section to read up on the methodology.'
     if 'gold_standard_transcript' not in st.session_state:
         st.session_state['gold_standard_transcript'] = default_gold_standard_text
     if 'asr_transcript' not in st.session_state:
@@ -361,7 +362,7 @@ def demo_streamlit_app():
                 st.checkbox('Remove extra spaces', value=True, key='normalize_remove_spaces', label_visibility="visible", help='Remove extra spaces between words before comparing')
                 st.write('**Error padding options**')
                 st.slider('Neighboring words to include on each side', min_value=1, max_value=10, value=3, key='error_padding_words', label_visibility="visible", help='Select the number of neighboring words that should be included when evaluating semantic similarity between *differing* sections of the gold standard and ASR transcripts')
-                st.caption("Sections in which the two transcripts differ may at times contain blank text in one of the transcripts. (For example, in the default sample transcript above, the word 'the' is deleted from 'She walked to the office' in the ASR version.) Because an empty text string cannot be vector-embedded or compared to the embedding of another string, it is necessary to include surrounding words to ensure that the context of the differing sections is accounted for when determining semantic similarity.\n\nNote that selecting too many neighboring words can result in overlapping with other error sections, which will artificially decrease the semantic similarity score.")
+                st.caption("Error sections - words, phrases, or sentences where the two transcripts differ - may at times contain blank text in one of the transcripts. (For example, if one transcript states 'She walked to the office' and the second transcript states 'She walked to office', the error section for the second transcript would be blank, as the word 'the' is not present.) Because an empty text string cannot be vector-embedded or compared to the embedding of another string, it is necessary to include surrounding words to ensure that the context of the differing sections is accounted for when determining semantic similarity.")
 
             evaluate_button = st.form_submit_button('Measure accuracy', type='primary')
 
