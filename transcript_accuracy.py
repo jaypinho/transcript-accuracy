@@ -101,6 +101,14 @@ def normalize_text(text_string, normalizations=['lower_case', 'standardize_numbe
     if 'standardize_numbers' in normalizations:
         modified_text = re.sub(r'\b(?P<num>\d+(,\d+)*(\.\d+)?)(st|nd|rd|th)\b', lambda m: num2words(float(m.group('num').replace(",", "")), to='ordinal'), modified_text) # Ordinals
 
+        quantifiers = {
+            "thousand": 1000,
+            "million": 1000000,
+            "billion": 1000000000,
+            "trillion": 1000000000000
+        }
+        modified_text = re.sub(r'\b(?P<num>\d+(,\d+)*(\.\d+)?) (?P<quantifier>thousand|million|billion|trillion)\b', lambda m: str(float(m.group('num').replace(",", "")) * quantifiers[m.group('quantifier')]), modified_text) # Combinations of digits and quantifiers like 'billion'
+
         currencies = {
             "$": "USD",
             "£": "GBP",
@@ -109,7 +117,7 @@ def normalize_text(text_string, normalizations=['lower_case', 'standardize_numbe
         }
         modified_text = re.sub(r'(?P<currency>\$|£|€|¥)(?P<num>\d+(,\d+)*(\.\d+)?)\b', lambda m: num2words(float(m.group('num').replace(",", "")), to='currency', currency=currencies[m.group('currency')]), modified_text) # Currency amounts
 
-        modified_text = re.sub(r'\b(?P<num>\d+(,\d+)*(\.\d+)?)\b', lambda m: num2words(float(m.group('num').replace(",", ""))), modified_text) # All other numbers
+        modified_text = re.sub(r'\b(?P<num>\d+(,\d+)*(\.\d+)?)\b(?P<pct>%)?', lambda m: f'{num2words(float(m.group("num").replace(",", "")))}{" percent" if m.group("pct") else ""}', modified_text) # All other numbers
 
     for normalization_title, normalization_steps in text_replacements.items():
         if normalization_title not in normalizations:
@@ -125,14 +133,20 @@ def normalize_text(text_string, normalizations=['lower_case', 'standardize_numbe
 def compare_texts(baseline, comparison, model='jiwer', buffer=5):
     if model == 'jiwer':
         alignments = jiwer.process_words(baseline, comparison)
-        grouped_segments = group_text_segments(alignments, discard_matching_segments=False)
+        grouped_segments = group_text_segments(alignments, discard_matching_segments=False, buffer=buffer)
         snippet_pairs = []
+        # print(buffer)
         for idx, segment in enumerate(grouped_segments):
             if segment['current_alignment'].type != 'equal':
-                buffered_segment = evaluate_alignment(alignments, segment['current_alignment'], buffer=buffer)
-                segment['baseline_snippet_buffered'] = buffered_segment['baseline_snippet']
-                segment['comparison_snippet_buffered'] = buffered_segment['comparison_snippet']
-                snippet_pairs.append([buffered_segment['baseline_snippet'], buffered_segment['comparison_snippet'], idx])
+                differing_segment = evaluate_alignment(alignments, segment['current_alignment'], buffer=buffer)
+                segment['baseline_snippet_pre'] = differing_segment['baseline_snippet_pre']
+                segment['baseline_snippet_post'] = differing_segment['baseline_snippet_post']
+                segment['comparison_snippet_pre'] = differing_segment['comparison_snippet_pre']
+                segment['comparison_snippet_post'] = differing_segment['comparison_snippet_post']
+                # print(differing_segment)
+                segment['baseline_snippet_buffered'] = " ".join([differing_segment['baseline_snippet_pre'], differing_segment['baseline_snippet'], differing_segment['baseline_snippet_post']])
+                segment['comparison_snippet_buffered'] = " ".join([differing_segment['comparison_snippet_pre'], differing_segment['comparison_snippet'], differing_segment['comparison_snippet_post']])
+                snippet_pairs.append([segment['baseline_snippet_buffered'], segment['comparison_snippet_buffered'], idx])
         embedding_similarities = get_embedding_similarities(snippet_pairs)
         for similarity in embedding_similarities:
             grouped_segments[similarity['segment_index']]['cosine_similarity'] = similarity['cosine_similarity']
@@ -147,17 +161,19 @@ def compare_texts(baseline, comparison, model='jiwer', buffer=5):
 # INPUT: The output from jiwer.process_words, a specific alignment within that output, and a specified word count buffer to include on either side
 # OUTPUT: The baseline_snippet and comparison_snippet of the specific alignment, including the buffer text on either side. I don't *think* there's any reason we would need to run this method for alignments of type 'equal', since the two snippets would always match. 
 def evaluate_alignment(alignments, current_alignment, buffer=0):
-    baseline_snippet = " ".join(alignments.references[0][max(current_alignment.ref_start_idx-buffer, 0):(current_alignment.ref_end_idx+buffer)]).strip()
-    comparison_snippet = " ".join(alignments.hypotheses[0][max(current_alignment.hyp_start_idx-buffer, 0):(current_alignment.hyp_end_idx+buffer)]).strip()
     return {
-        "baseline_snippet": baseline_snippet,
-        "comparison_snippet": comparison_snippet
+        "baseline_snippet": " ".join(alignments.references[0][current_alignment.ref_start_idx:current_alignment.ref_end_idx]).strip(),
+        "baseline_snippet_pre": " ".join(alignments.references[0][max(current_alignment.ref_start_idx-buffer, 0):current_alignment.ref_start_idx]).strip() if buffer > 0 else None,
+        "baseline_snippet_post": " ".join(alignments.references[0][current_alignment.ref_end_idx:(current_alignment.ref_end_idx+buffer)]).strip() if buffer > 0 else None,
+        "comparison_snippet": " ".join(alignments.hypotheses[0][current_alignment.hyp_start_idx:current_alignment.hyp_end_idx]).strip(),
+        "comparison_snippet_pre": " ".join(alignments.hypotheses[0][max(current_alignment.hyp_start_idx-buffer, 0):current_alignment.hyp_start_idx]).strip() if buffer > 0 else None,
+        "comparison_snippet_post": " ".join(alignments.hypotheses[0][current_alignment.hyp_end_idx:(current_alignment.hyp_end_idx+buffer)]).strip() if buffer > 0 else None
     } # current_alignment.__dict__ serializes it into a json.dumps-able form
 
 
 # INPUT: The full object from jiwer.process_words
 # OUTPUT: A list of dicts containing *grouped* text segments (meaning that adjacent insertions, deletions, and substitutions are mashed together), in the form of 'baseline_snippet', 'comparison_snippet', and the alignment object itself for that grouped segment
-def group_text_segments(alignments, discard_matching_segments=True):
+def group_text_segments(alignments, discard_matching_segments=True, buffer=5):
     snippet_pairs = []
     segment_in_progress = None
     for i in range(len(alignments.alignments[0])):
@@ -251,6 +267,12 @@ def fill_example_transcripts(default_gold_standard, default_asr):
     elif st.session_state['example_transcripts'] == 'The Bee Movie (2007) dialogue (gold standard vs. Nova by Deepgram)':
         st.session_state['gold_standard_transcript'] = open('bee_movie_gold_standard.txt', 'r').read()
         st.session_state['asr_transcript'] = open('bee_movie_nova.txt', 'r').read()
+    elif st.session_state['example_transcripts'] == 'Alphabet FY23 Q2 Earnings Call (gold standard vs. Nova by Deepgram)':
+        st.session_state['gold_standard_transcript'] = open('alphabet_earnings_gold_standard.txt', 'r').read()
+        st.session_state['asr_transcript'] = open('alphabet_earnings_nova.txt', 'r').read()
+    elif st.session_state['example_transcripts'] == 'Alphabet FY23 Q2 Earnings Call (gold standard vs. whisper-small-en by OpenAI)':
+        st.session_state['gold_standard_transcript'] = open('alphabet_earnings_gold_standard.txt', 'r').read()
+        st.session_state['asr_transcript'] = open('alphabet_earnings_whisper_small_en.txt', 'r').read()
 
 
 def how_it_works():
@@ -317,7 +339,7 @@ def demo_streamlit_app():
 
     with sidebar:
 
-        st.selectbox('Choose sample transcripts to compare', ('Default short text', '2023 U.S. State of the Union speech (NYT vs. whisper-medium-en by OpenAI)', '2023 U.S. State of the Union speech (NYT vs. whisper-small-en by OpenAI)', '2023 U.S. State of the Union speech (NYT vs. whisper-tiny-en by OpenAI)', '2023 U.S. State of the Union speech (NYT vs. Nova by Deepgram)', 'The Bee Movie (2007) dialogue (gold standard vs. whisper-large-v2 by OpenAI)', 'The Bee Movie (2007) dialogue (gold standard vs. Nova by Deepgram)'), index=0, key='example_transcripts', help='Select a gold-standard transcript and an ASR transcript to compare it to', on_change=fill_example_transcripts, kwargs={'default_gold_standard': default_gold_standard_text, 'default_asr': default_asr_text}, disabled=False, label_visibility="visible")
+        st.selectbox('Choose sample transcripts to compare', ('Default short text', '2023 U.S. State of the Union speech (NYT vs. whisper-medium-en by OpenAI)', '2023 U.S. State of the Union speech (NYT vs. whisper-small-en by OpenAI)', '2023 U.S. State of the Union speech (NYT vs. whisper-tiny-en by OpenAI)', '2023 U.S. State of the Union speech (NYT vs. Nova by Deepgram)', 'The Bee Movie (2007) dialogue (gold standard vs. whisper-large-v2 by OpenAI)', 'The Bee Movie (2007) dialogue (gold standard vs. Nova by Deepgram)', 'Alphabet FY23 Q2 Earnings Call (gold standard vs. Nova by Deepgram)', 'Alphabet FY23 Q2 Earnings Call (gold standard vs. whisper-small-en by OpenAI)'), index=0, key='example_transcripts', help='Select a gold-standard transcript and an ASR transcript to compare it to', on_change=fill_example_transcripts, kwargs={'default_gold_standard': default_gold_standard_text, 'default_asr': default_asr_text}, disabled=False, label_visibility="visible")
         with st.form('transcript-form'):
             # gold_standard_transcript = st.text_area('Paste the gold standard transcript here', value=open('sotu_2023_transcript_nyt.txt', 'r').read(), height=400)
             # asr_transcript = st.text_area('Paste the ASR transcript here', value=open('sotu_2023_transcript_whisper_small_en.txt', 'r').read(), height=400)
@@ -377,13 +399,12 @@ def demo_streamlit_app():
                     col2.metric(label="WER", value=f"{round(segments['alignments'].wer*100,2)}%")
                     col3.metric(label="Distinct Error Sections", value=f"{len([x for x in segments['grouped_segments'] if 'cosine_similarity' in x])}")
                     all_errors = [x for x in segments['grouped_segments'] if 'cosine_similarity' in x]
-                    worst_offenders = [{'Truth Set': x['baseline_snippet_buffered'], 'Error': x['comparison_snippet_buffered'], 'Similarity Score': x['cosine_similarity']} for x in sorted(all_errors, key=lambda x: x['cosine_similarity'])[:20]]
+                    worst_offenders = [{'Truth Set': f"{x['baseline_snippet_pre']} <strong style='color:red;'>{x['baseline_snippet']}</strong> {x['baseline_snippet_post']}", 'Error': f"{x['comparison_snippet_pre']} <strong style='color:red;'>{x['comparison_snippet']}</strong> {x['comparison_snippet_post']}", 'Similarity Score': x['cosine_similarity']} for x in sorted(all_errors, key=lambda x: x['cosine_similarity'])[:20]]
                     df = pd.DataFrame.from_dict(worst_offenders)
                     with worst_offenders_container:
-                        # st.subheader('Worst Offenders')
-                        st.table(df)
+                        # st.table(df)
+                        st.markdown(df.style.to_html(),unsafe_allow_html=True) # See https://discuss.streamlit.io/t/unable-to-center-table-cell-values-with-pandas-style-need-input-to-see-if-this-is-even-possible-with-streamlit/31852/2
                     with transcript_container:
-                        # st.subheader('Transcript Differences')
                         annotated_text(display_annotated_transcripts(segments))
 
 demo_streamlit_app()
