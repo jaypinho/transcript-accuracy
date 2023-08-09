@@ -312,9 +312,9 @@ def how_it_works():
 
         The problem with WER is that, while it provides a rudimentary understanding of how much an ASR-generated transcript differs from an ideal one, it doesn't capture the significance of the erroneous words. For example, a gold-standard transcript that reads <code>the *cat* entered the house</code> has a drastically different meaning from <code>the *car* entered the house</code>, but is nearly identical to <code>*a* cat entered the house</code>. And yet both alternative transcripts would have the same WER of 20%.
 
-        This is where TAA comes in. For each 'error section' - defined here as one or more consecutive words in which the gold standard and ASR transcripts differ - TAA embeds the words or phrases using a vector embedding model (currently using OpenAI's <code>text-embedding-ada-002</code>). This model encodes the semantic meaning of a given text string within a 1,536-dimensional space. Once this process has been completed for each error section, TAA calculates the cosine similarity of each text pair in order to find how much semantic meaning was lost due to the inaccurate transcription.
+        This is where **Semantic WER** comes in. For each 'error section' - defined here as one or more consecutive words in which the gold standard and ASR transcripts differ - TAA embeds the words or phrases using a vector embedding model (currently using OpenAI's <code>text-embedding-ada-002</code>). This model encodes the semantic meaning of a given text string within a 1,536-dimensional space. Once this process has been completed for each error section, TAA calculates the cosine similarity of each text pair in order to find how much semantic meaning was lost due to the inaccurate transcription (and then applies an optional adjustment to 'squeeze' the similarity score into a smaller range - see below). The **Semantic WER** is then calculated by multiplying the *dissimilarity* between the section pair by the number of errors (insertions, deletions, and substitutions) in the section.
 
-        In the case of <code>the cat entered the house</code>, its similarity score to <code>a cat entered the house</code> is 0.989 (out of a highest possible score of 1, for identical meaning). It scores signifcantly lower against <code>the car entered the house</code>: 0.928.
+        Using the default settings, for example, the gold standard transcript <code>the cat entered the house</code> and the ASR transcipt <code>a cat entered the house</code> produce a WER of 20% but a **Semantic WER** of only 2.87%. By contrast, an ASR transcript of <code>the car entered the house</code> would produce the same 20% WER but a **Semantic WER** of 6.05%, more than double the **Semantic WER** of the (much closer) first ASR transcript.
 
         **How to use TAA**
 
@@ -324,7 +324,7 @@ def how_it_works():
 
         The minimum words option allows you to specify the minimum number of words from either transcript that can be used to calculate a similarity score for a given error section. This, too, is somewhat subjective. The minimum possible value is 1, meaning that at least one word in the pair of texts must always be included as part of the vector embeddings and thus accounted for in the resulting similarity score for that section. For example, <code>the *cat* entered the house</code> vs. <code>the *car* entered the house</code> has a single error section consisting of the word pair <code>cat</code> and <code>car</code>. If the option for 3 minimum words were selected, then TAA would calculate the semantic similarity score for <code>the cat entered</code> vs. <code>the car entered</code>.
 
-        The higher the number of minimum words selected, the relatively lower will be the impact of the error section. This is because, if many neighboring words are co-embedded, a short error section may achieve a semantic similarity score higher than it otherwise would, due to the presence of identical words surrounding the differing ones.
+        Generally, the higher the number of minimum words selected, the relatively lower will be the contribution of the error section to Semantic WER. This is because, if many neighboring words are co-embedded, a short error section may achieve a semantic similarity score higher than it otherwise would, due to the presence of identical words surrounding the differing ones.
         
         Conversely, an error section might be penalized with an unduly low semantic similarity score if insufficient neighboring words are co-embedded -- especially in a scenario where the context provided by those additional words would allow a human to trivially grasp the meaning of the incorrectly transcribed section. (Think about the relative likelihoods of someone understanding that a typo has occurred if they read <code>the car entered the house</code> vs. <code>the car entered the house and meowed loudly</code>.)
 
@@ -345,10 +345,12 @@ def how_it_works():
         - [Semantic Distance: A New Metric for ASR Performance Analysis Towards Spoken Language Understanding](https://arxiv.org/pdf/2104.02138.pdf)
         - [Evaluating User Perception of Speech Recognition System Quality with Semantic Distance Metric](https://arxiv.org/pdf/2110.05376.pdf)
 
-        <br/>
-        I would also like to thank the team at Deepgram for engaging helpfully on this topic in their Discord.
+        \\
+        &nbsp;
+          
+        I would especially like to thank A) the team at Deepgram for engaging helpfully on the topic of transcript accuracy in their Discord, and B) the authors of [Better Evaluation of ASR in Speech Translation Context Using Word Embeddings](https://hal.science/hal-01350102/file/metrics_correlation_asr-smt.pdf) whose paper helped guide me in my development of the **Semantic WER** metric. 
 
-        Any errors, mistakes, bugs, or incorrect statements are my own.
+        Any errors, mistakes, bugs, or incorrect statements are my own. Please [let me know](https://twitter.com/jaypinho) if you find them!
     """
 
 
@@ -484,7 +486,7 @@ def demo_streamlit_app():
                 st.checkbox('Replace hyphens with spaces', value=True, key='normalize_replace_hyphens', label_visibility="visible", help='Replace hyphens and dashes with spaces before comparing')
                 st.checkbox('Remove extra spaces', value=True, key='normalize_remove_spaces', label_visibility="visible", help='Remove extra spaces between words before comparing')
                 st.write('**Minimum words options**')
-                st.slider('Minimum words in similarity comparison', min_value=1, max_value=10, value=1, key='min_words_in_similarity_comparison', label_visibility="visible", help='Select the minimum number of words in either transcript to include when evaluating semantic similarity between *differing* sections (adjacent words will be incorporated if either of the two transcripts\' error sections is below the minimum)')
+                st.slider('Minimum words in similarity comparison', min_value=1, max_value=10, value=2, key='min_words_in_similarity_comparison', label_visibility="visible", help='Select the minimum number of words in either transcript to include when evaluating semantic similarity between *differing* sections (adjacent words will be incorporated if either of the two transcripts\' error sections is below the minimum)')
                 st.caption("Error sections - words, phrases, or sentences where the two transcripts differ - may at times contain blank text in one of the transcripts. (For example, if one transcript states 'She walked to the office' and the second transcript states 'She walked to office', the error section for the second transcript would be blank, as the word 'the' is not present.) In this scenario, because an empty text string cannot be vector-embedded or compared to the embedding of another string, it is necessary to include surrounding words to ensure that the context of the differing sections is accounted for when determining semantic similarity.")
                 st.write('**MinimumcCosine similarity options**')
                 st.slider('Minimum cosine similarity threshold', min_value=0.0, max_value=1.0, value=0.70, step=0.01, key='minimum_similarity', label_visibility="visible", help='Select the cosine similarity threshold value below which an error section should be considered fully semantically different from the corresponding section in the gold standard transcript')
@@ -517,10 +519,10 @@ def demo_streamlit_app():
 
                     if normalized_text1 == normalized_text2:
                         locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
-                        col1.metric(label="Total Words", value=f"{locale.format_string('%d', len(normalized_text1.split(' ')), grouping=True)}")
-                        col2.metric(label="WER", value=f"0%")
-                        col3.metric(label="Distinct Error Sections", value="0")
-                        col4.metric(label="Total Meaning Lost", value="0%")
+                        col1.metric(label="Total Words", value=f"{locale.format_string('%d', len(normalized_text1.split(' ')), grouping=True)}", help="Total words in the gold standard transcript")
+                        col2.metric(label="WER", value=f"0%", help="Word Error Rate - (substitutions + insertions + deletions) / total words")
+                        col3.metric(label="Distinct Error Sections", value="0", help="Number of distinct sections of the transcript containing one or more consecutive errors")
+                        col4.metric(label="Semantic WER", value="0%", help="The semantic-adjusted Word Error Rate, in which the difference between the semantic meanings in each error section pair is multiplied by the number of error words in that section")
                         body_container.write('**The two normalized transcripts are identical.**')
                         st.stop()
 
@@ -535,10 +537,10 @@ def demo_streamlit_app():
                     semantic_wer = (substitutions + insertions + deletions) / len(segments['alignments'].references[0])
 
                     locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
-                    col1.metric(label="Total Words", value=f"{locale.format_string('%d', len(segments['alignments'].references[0]), grouping=True)}")
-                    col2.metric(label="WER", value=f"{round(segments['alignments'].wer*100,2)}%")
-                    col3.metric(label="Distinct Error Sections", value=f"{len([x for x in segments['grouped_segments'] if 'cosine_similarity' in x])}")
-                    col4.metric(label="Semantic WER", value=f"{round(semantic_wer*100, 2)}%")
+                    col1.metric(label="Total Words", value=f"{locale.format_string('%d', len(segments['alignments'].references[0]), grouping=True)}", help="Total words in the gold standard transcript")
+                    col2.metric(label="WER", value=f"{round(segments['alignments'].wer*100,2)}%", help="Word Error Rate - (substitutions + insertions + deletions) / total words")
+                    col3.metric(label="Distinct Error Sections", value=f"{len([x for x in segments['grouped_segments'] if 'cosine_similarity' in x])}", help="Number of distinct sections of the transcript containing one or more consecutive errors")
+                    col4.metric(label="Semantic WER", value=f"{round(semantic_wer*100, 2)}%", help="The semantic-adjusted Word Error Rate, in which the difference between the semantic meanings in each error section pair is multiplied by the number of error words in that section")
                     worst_offenders = [{'Gold Standard': f"{str(x['baseline_snippet_pre'] or '')} <strong style='color:red;'>{x['baseline_snippet']}</strong> {str(x['baseline_snippet_post'] or '')}", 'Error Section': f"{str(x['comparison_snippet_pre'] or '')} <strong style='color:red;'>{x['comparison_snippet']}</strong> {str(x['comparison_snippet_post'] or '')}", 'Similarity Score': x['cosine_similarity']} for x in sorted(all_errors, key=lambda x: x['cosine_similarity'])[:20]]
                     df = pd.DataFrame.from_dict(worst_offenders)
                     with worst_offenders_container:
