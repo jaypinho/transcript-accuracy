@@ -15,7 +15,7 @@ st.set_page_config(page_title='Transcript Accuracy Analyzer', layout="wide")
 import openai
 from openai.embeddings_utils import cosine_similarity
 import pandas as pd
-import statistics
+import math
 
 
 # INPUT: A YouTube video ID
@@ -132,26 +132,24 @@ def normalize_text(text_string, normalizations=['lower_case', 'standardize_numbe
 
 # INPUT: Two input text strings
 # OUTPUT: A metric comparing the similarity of the two texts (using Levenshtein ratio or WER)
-def compare_texts(baseline, comparison, model='jiwer', buffer=5):
+def compare_texts(baseline, comparison, model='jiwer', min_words=5):
     if model == 'jiwer':
         alignments = jiwer.process_words(baseline, comparison)
-        grouped_segments = group_text_segments(alignments, discard_matching_segments=False, buffer=buffer)
+        grouped_segments = group_text_segments(alignments, discard_matching_segments=False)
         snippet_pairs = []
-        # print(buffer)
         for idx, segment in enumerate(grouped_segments):
             if segment['current_alignment'].type != 'equal':
-                differing_segment = evaluate_alignment(alignments, segment['current_alignment'], buffer=buffer)
+                differing_segment = evaluate_alignment(alignments, segment['current_alignment'], min_words=min_words)
                 segment['baseline_snippet_pre'] = differing_segment['baseline_snippet_pre']
                 segment['baseline_snippet_post'] = differing_segment['baseline_snippet_post']
                 segment['comparison_snippet_pre'] = differing_segment['comparison_snippet_pre']
                 segment['comparison_snippet_post'] = differing_segment['comparison_snippet_post']
-                # print(differing_segment)
-                segment['baseline_snippet_buffered'] = " ".join([differing_segment['baseline_snippet_pre'], differing_segment['baseline_snippet'], differing_segment['baseline_snippet_post']])
-                segment['comparison_snippet_buffered'] = " ".join([differing_segment['comparison_snippet_pre'], differing_segment['comparison_snippet'], differing_segment['comparison_snippet_post']])
+                segment['baseline_snippet_buffered'] = " ".join([str(differing_segment['baseline_snippet_pre'] or ''), differing_segment['baseline_snippet'], str(differing_segment['baseline_snippet_post'] or '')]).strip()
+                segment['comparison_snippet_buffered'] = " ".join([str(differing_segment['comparison_snippet_pre'] or ''), differing_segment['comparison_snippet'], str(differing_segment['comparison_snippet_post'] or '')]).strip()
                 snippet_pairs.append([segment['baseline_snippet_buffered'], segment['comparison_snippet_buffered'], idx])
         embedding_similarities = get_embedding_similarities(snippet_pairs)
         for similarity in embedding_similarities:
-            grouped_segments[similarity['segment_index']]['cosine_similarity'] = similarity['cosine_similarity']
+            grouped_segments[similarity['segment_index']]['cosine_similarity'] = calculate_modified_similarity(similarity['cosine_similarity'])
         return {
             'grouped_segments': grouped_segments,
             'alignments': alignments
@@ -161,26 +159,47 @@ def compare_texts(baseline, comparison, model='jiwer', buffer=5):
 
 
 # INPUT: The output from jiwer.process_words, a specific alignment within that output, and a specified word count buffer to include on either side
-# OUTPUT: The baseline_snippet and comparison_snippet of the specific alignment, including the buffer text on either side. I don't *think* there's any reason we would need to run this method for alignments of type 'equal', since the two snippets would always match. 
-def evaluate_alignment(alignments, current_alignment, buffer=0):
+# OUTPUT: The baseline_snippet and comparison_snippet of the specific alignment, including the buffer text on either side. 
+def evaluate_alignment(alignments, current_alignment, min_words=0):
+
+    substitution_size = 0
+    insertion_size = 0
+    deletion_size = 0
+
+    if current_alignment.type == 'substitute':
+        substitution_size = current_alignment.ref_end_idx - current_alignment.ref_start_idx
+    elif current_alignment.type == 'insert':
+        insertion_size = (current_alignment.hyp_end_idx - current_alignment.hyp_start_idx) - (current_alignment.ref_end_idx - current_alignment.ref_start_idx)
+    elif current_alignment.type == 'delete':
+        deletion_size = (current_alignment.ref_end_idx - current_alignment.ref_start_idx) - (current_alignment.hyp_end_idx - current_alignment.hyp_start_idx)
+
+    lower_word_count_in_section = min((current_alignment.ref_end_idx - current_alignment.ref_start_idx), (current_alignment.hyp_end_idx - current_alignment.hyp_start_idx))
+    modified_buffer = 0
+    if lower_word_count_in_section < min_words:
+        modified_buffer = min_words - lower_word_count_in_section
+        modified_buffer = math.ceil(modified_buffer / 2)
+
     return {
         "baseline_snippet": " ".join(alignments.references[0][current_alignment.ref_start_idx:current_alignment.ref_end_idx]).strip(),
-        "baseline_snippet_pre": " ".join(alignments.references[0][max(current_alignment.ref_start_idx-buffer, 0):current_alignment.ref_start_idx]).strip() if buffer > 0 else None,
-        "baseline_snippet_post": " ".join(alignments.references[0][current_alignment.ref_end_idx:(current_alignment.ref_end_idx+buffer)]).strip() if buffer > 0 else None,
+        "baseline_snippet_pre": " ".join(alignments.references[0][max(current_alignment.ref_start_idx-modified_buffer, 0):current_alignment.ref_start_idx]).strip() if modified_buffer > 0 else None,
+        "baseline_snippet_post": " ".join(alignments.references[0][current_alignment.ref_end_idx:(current_alignment.ref_end_idx+modified_buffer)]).strip() if modified_buffer > 0 else None,
         "comparison_snippet": " ".join(alignments.hypotheses[0][current_alignment.hyp_start_idx:current_alignment.hyp_end_idx]).strip(),
-        "comparison_snippet_pre": " ".join(alignments.hypotheses[0][max(current_alignment.hyp_start_idx-buffer, 0):current_alignment.hyp_start_idx]).strip() if buffer > 0 else None,
-        "comparison_snippet_post": " ".join(alignments.hypotheses[0][current_alignment.hyp_end_idx:(current_alignment.hyp_end_idx+buffer)]).strip() if buffer > 0 else None
+        "comparison_snippet_pre": " ".join(alignments.hypotheses[0][max(current_alignment.hyp_start_idx-modified_buffer, 0):current_alignment.hyp_start_idx]).strip() if modified_buffer > 0 else None,
+        "comparison_snippet_post": " ".join(alignments.hypotheses[0][current_alignment.hyp_end_idx:(current_alignment.hyp_end_idx+modified_buffer)]).strip() if modified_buffer > 0 else None,
+        "substitution_size": substitution_size,
+        "insertion_size": insertion_size,
+        "deletion_size": deletion_size
     } # current_alignment.__dict__ serializes it into a json.dumps-able form
 
 
 # INPUT: The full object from jiwer.process_words
 # OUTPUT: A list of dicts containing *grouped* text segments (meaning that adjacent insertions, deletions, and substitutions are mashed together), in the form of 'baseline_snippet', 'comparison_snippet', and the alignment object itself for that grouped segment
-def group_text_segments(alignments, discard_matching_segments=True, buffer=5):
+def group_text_segments(alignments, discard_matching_segments=True):
     snippet_pairs = []
     segment_in_progress = None
     for i in range(len(alignments.alignments[0])):
         cur_alignment = alignments.alignments[0][i]
-        evaluated_alignment = evaluate_alignment(alignments, cur_alignment, buffer=0)
+        evaluated_alignment = evaluate_alignment(alignments, cur_alignment, min_words=1)
         if segment_in_progress is None:
             segment_in_progress = evaluated_alignment
             segment_in_progress['current_alignment'] = cur_alignment
@@ -190,6 +209,9 @@ def group_text_segments(alignments, discard_matching_segments=True, buffer=5):
             segment_in_progress['current_alignment'].type = 'combo'
             segment_in_progress['current_alignment'].ref_end_idx = cur_alignment.ref_end_idx
             segment_in_progress['current_alignment'].hyp_end_idx = cur_alignment.hyp_end_idx
+            segment_in_progress['substitution_size'] += evaluated_alignment['substitution_size']
+            segment_in_progress['insertion_size'] += evaluated_alignment['insertion_size']
+            segment_in_progress['deletion_size'] += evaluated_alignment['deletion_size']
         else: # The segment is over
             if discard_matching_segments == False or segment_in_progress['baseline_snippet'] != segment_in_progress['comparison_snippet']:
                 snippet_pairs.append(segment_in_progress)
@@ -197,6 +219,11 @@ def group_text_segments(alignments, discard_matching_segments=True, buffer=5):
             segment_in_progress['current_alignment'] = cur_alignment
     if discard_matching_segments == False or segment_in_progress['baseline_snippet'] != segment_in_progress['comparison_snippet']:
         snippet_pairs.append(segment_in_progress)
+    # print('Total number of correct words:')
+    # print(sum([x['current_alignment'].ref_end_idx - x['current_alignment'].ref_start_idx for x in snippet_pairs if x['current_alignment'].type == 'equal']))
+    # print('Total number of words in the gold standard transcript:')
+    # print(len(alignments.references[0]))
+    # print(json.dumps([{k: v if k != 'current_alignment' else v.__dict__ for k, v in sp.items()} for sp in snippet_pairs], indent=2))
     return snippet_pairs
 
 
@@ -268,6 +295,13 @@ def fill_example_transcripts(default_gold_standard, default_asr, sample_transcri
                 break
 
 
+def calculate_modified_similarity(similarity):
+    if similarity <= st.session_state['minimum_similarity']:
+        return 0.0
+    else:
+        return (similarity - st.session_state['minimum_similarity']) / (1 - st.session_state['minimum_similarity'])
+
+
 def how_it_works():
     return """
         The Transcript Accuracy Analyzer (TAA) is an easy and comprehensive way to measure the accuracy of automated speech recognition (ASR) transcriptions.
@@ -288,19 +322,22 @@ def how_it_works():
 
         Below the text boxes are the advanced settings. The text normalization options govern how TAA standardizes the two transcripts before evaluating the ASR one for accuracy. Because there is significant subjectivity in applying punctuation, spacing, hyphenation, and numerical style (e.g. 100 vs. 'one hundred') when transcribing audio, TAA by default normalizes the two transcripts for these purposes in order to achieve an accuracy analysis focused solely on the *words* themselves. However, each of these settings can be independently toggled on or off.
 
-        The error padding option allows you to specify how many words on either side of a given error section should be included when generating vector embeddings. This, too, is somewhat subjective. The minimum possible value is 1, meaning that one word on either side of the pair of texts is included as part of the vector embeddings and thus accounted for in the resulting similarity score for that section. For example, <code>the *cat* entered the house</code> vs. <code>the *car* entered the house</code> has a single error section consisting of the word pair <code>cat</code> and <code>car</code>. If the option for 1 neighboring word were selected, then TAA would calculate the semantic similarity score for <code>the cat entered</code> vs. <code>the car entered</code>.
+        The minimum words option allows you to specify the minimum number of words from either transcript that can be used to calculate a similarity score for a given error section. This, too, is somewhat subjective. The minimum possible value is 1, meaning that at least one word in the pair of texts must always be included as part of the vector embeddings and thus accounted for in the resulting similarity score for that section. For example, <code>the *cat* entered the house</code> vs. <code>the *car* entered the house</code> has a single error section consisting of the word pair <code>cat</code> and <code>car</code>. If the option for 3 minimum words were selected, then TAA would calculate the semantic similarity score for <code>the cat entered</code> vs. <code>the car entered</code>.
 
-        The more neighboring words selected, the relatively lower will be the impact of the error section. This is because, if many neighboring words are co-embedded, a short error section may achieve a semantic similarity score higher than it otherwise would, due to the presence of identical words surrounding the differing ones.
+        The higher the number of minimum words selected, the relatively lower will be the impact of the error section. This is because, if many neighboring words are co-embedded, a short error section may achieve a semantic similarity score higher than it otherwise would, due to the presence of identical words surrounding the differing ones.
         
         Conversely, an error section might be penalized with an unduly low semantic similarity score if insufficient neighboring words are co-embedded -- especially in a scenario where the context provided by those additional words would allow a human to trivially grasp the meaning of the incorrectly transcribed section. (Think about the relative likelihoods of someone understanding that a typo has occurred if they read <code>the car entered the house</code> vs. <code>the car entered the house and meowed loudly</code>.)
 
-        One additional caveat to keep in mind with this neighboring words setting: if two error sections are located extremely close to each other - say, <code>the *cat* entered the *house*</code> vs. <code>the *car* entered the *hose*</code> - then a high number of neighboring words will cause the embedding for each error section to overlap with the other error section. This may artificially decrease the semantic similarity score for both error sections. 
+        One additional caveat to keep in mind with this minimum words setting: if two error sections are located extremely close to each other - say, <code>the *cat* entered the *house*</code> vs. <code>the *car* entered the *hose*</code> - then a high minimum words setting will cause the embedding for each error section to overlap with the other error section. This may artificially decrease the semantic similarity score for both error sections.
+
+        Lastly, the minimum cosine similarity setting effectively squeezes the cosine similarity values into a smaller range. Empirically, OpenAI text embeddings appear to cluster fairly tightly into the 0.70 - 1.00 range, meaning that even words, phrases, or sentences with highly different semantic content nevertheless often achieve cosine similarity scores of 0.70 or higher. So the minimum threshold setting treats every cosine similarity below the specified value as fully dissimilar - in other words, all meaning in common between the two segments of an error section pair is assumed to be lost below that threshold, and the remaining portion of the range (above the minimum, and less than or equal to 1.0) represents the portion of information lost or preserved. 
 
         **Acknowledgments**
 
         Please refer to previous work by researchers and practitioners in this and related areas:
 
         - [On the Use of Information Retrieval Measures for Speech Recognition Evaluation](https://www.researchgate.net/publication/37433359_On_the_Use_of_Information_Retrieval_Measures_for_Speech_Recognition_Evaluation)
+        - [Better Evaluation of ASR in Speech Translation Context Using Word Embeddings](https://hal.science/hal-01350102/file/metrics_correlation_asr-smt.pdf)
         - [Word Error Rate Estimation for Speech Recognition: e-WER](https://aclanthology.org/P18-2004.pdf)
         - [What is Word Error Rate (WER)?](https://deepgram.com/learn/what-is-word-error-rate)
         - [The Trouble with Word Error Rate (WER)](https://deepgram.com/learn/the-trouble-with-wer)
@@ -446,9 +483,12 @@ def demo_streamlit_app():
                 st.checkbox('Remove punctuation', value=True, key='normalize_remove_punctuation', label_visibility="visible", help='Remove punctuation (e.g. commas, periods, exclamation marks, etc.) before comparing')
                 st.checkbox('Replace hyphens with spaces', value=True, key='normalize_replace_hyphens', label_visibility="visible", help='Replace hyphens and dashes with spaces before comparing')
                 st.checkbox('Remove extra spaces', value=True, key='normalize_remove_spaces', label_visibility="visible", help='Remove extra spaces between words before comparing')
-                st.write('**Error padding options**')
-                st.slider('Neighboring words to include on each side', min_value=1, max_value=10, value=3, key='error_padding_words', label_visibility="visible", help='Select the number of neighboring words that should be included when evaluating semantic similarity between *differing* sections of the gold standard and ASR transcripts')
-                st.caption("Error sections - words, phrases, or sentences where the two transcripts differ - may at times contain blank text in one of the transcripts. (For example, if one transcript states 'She walked to the office' and the second transcript states 'She walked to office', the error section for the second transcript would be blank, as the word 'the' is not present.) Because an empty text string cannot be vector-embedded or compared to the embedding of another string, it is necessary to include surrounding words to ensure that the context of the differing sections is accounted for when determining semantic similarity.")
+                st.write('**Minimum words options**')
+                st.slider('Minimum words in similarity comparison', min_value=1, max_value=10, value=1, key='min_words_in_similarity_comparison', label_visibility="visible", help='Select the minimum number of words in either transcript to include when evaluating semantic similarity between *differing* sections (adjacent words will be incorporated if either of the two transcripts\' error sections is below the minimum)')
+                st.caption("Error sections - words, phrases, or sentences where the two transcripts differ - may at times contain blank text in one of the transcripts. (For example, if one transcript states 'She walked to the office' and the second transcript states 'She walked to office', the error section for the second transcript would be blank, as the word 'the' is not present.) In this scenario, because an empty text string cannot be vector-embedded or compared to the embedding of another string, it is necessary to include surrounding words to ensure that the context of the differing sections is accounted for when determining semantic similarity.")
+                st.write('**MinimumcCosine similarity options**')
+                st.slider('Minimum cosine similarity threshold', min_value=0.0, max_value=1.0, value=0.70, step=0.01, key='minimum_similarity', label_visibility="visible", help='Select the cosine similarity threshold value below which an error section should be considered fully semantically different from the corresponding section in the gold standard transcript')
+                st.caption("Although the technical range of cosine similarity is -1 to 1, in practice most word, phrase, and sentence pairs embedded by OpenAI's 'text-embedding-ada-002' model from corresponding transcripts have a cosine similarity between approximately 0.70 and 1.")
 
             evaluate_button = st.form_submit_button('Measure accuracy', type='primary')
 
@@ -480,25 +520,29 @@ def demo_streamlit_app():
                         col1.metric(label="Total Words", value=f"{locale.format_string('%d', len(normalized_text1.split(' ')), grouping=True)}")
                         col2.metric(label="WER", value=f"0%")
                         col3.metric(label="Distinct Error Sections", value="0")
-                        col4.metric(label="Median Error Pair Similarity", value="N/A")
+                        col4.metric(label="Total Meaning Lost", value="0%")
                         body_container.write('**The two normalized transcripts are identical.**')
                         st.stop()
 
                 with st.spinner('Comparing the transcripts...'):
 
-                    segments = compare_texts(normalized_text1, normalized_text2, model='jiwer', buffer=st.session_state['error_padding_words'])
+                    segments = compare_texts(normalized_text1, normalized_text2, model='jiwer', min_words=st.session_state['min_words_in_similarity_comparison'])
                     all_errors = [x for x in segments['grouped_segments'] if 'cosine_similarity' in x]
+
+                    substitutions = sum([x['substitution_size'] * (1 - x['cosine_similarity']) for x in segments['grouped_segments'] if 'cosine_similarity' in x])
+                    insertions = sum([x['insertion_size'] * (1 - x['cosine_similarity']) for x in segments['grouped_segments'] if 'cosine_similarity' in x])
+                    deletions = sum([x['deletion_size'] * (1 - x['cosine_similarity']) for x in segments['grouped_segments'] if 'cosine_similarity' in x])
+                    semantic_wer = (substitutions + insertions + deletions) / len(segments['alignments'].references[0])
 
                     locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
                     col1.metric(label="Total Words", value=f"{locale.format_string('%d', len(segments['alignments'].references[0]), grouping=True)}")
                     col2.metric(label="WER", value=f"{round(segments['alignments'].wer*100,2)}%")
                     col3.metric(label="Distinct Error Sections", value=f"{len([x for x in segments['grouped_segments'] if 'cosine_similarity' in x])}")
-                    col4.metric(label="Median Error Pair Similarity", value=round(statistics.median([x['cosine_similarity'] for x in all_errors]), 4))
-                    worst_offenders = [{'Truth Set': f"{x['baseline_snippet_pre']} <strong style='color:red;'>{x['baseline_snippet']}</strong> {x['baseline_snippet_post']}", 'Error': f"{x['comparison_snippet_pre']} <strong style='color:red;'>{x['comparison_snippet']}</strong> {x['comparison_snippet_post']}", 'Similarity Score': x['cosine_similarity']} for x in sorted(all_errors, key=lambda x: x['cosine_similarity'])[:20]]
+                    col4.metric(label="Semantic WER", value=f"{round(semantic_wer*100, 2)}%")
+                    worst_offenders = [{'Gold Standard': f"{str(x['baseline_snippet_pre'] or '')} <strong style='color:red;'>{x['baseline_snippet']}</strong> {str(x['baseline_snippet_post'] or '')}", 'Error Section': f"{str(x['comparison_snippet_pre'] or '')} <strong style='color:red;'>{x['comparison_snippet']}</strong> {str(x['comparison_snippet_post'] or '')}", 'Similarity Score': x['cosine_similarity']} for x in sorted(all_errors, key=lambda x: x['cosine_similarity'])[:20]]
                     df = pd.DataFrame.from_dict(worst_offenders)
                     with worst_offenders_container:
-                        # st.table(df)
-                        st.markdown(df.style.to_html(),unsafe_allow_html=True) # See https://discuss.streamlit.io/t/unable-to-center-table-cell-values-with-pandas-style-need-input-to-see-if-this-is-even-possible-with-streamlit/31852/2
+                        st.markdown(df.style.format({'Similarity Score': '{:.3f}'}).to_html(),unsafe_allow_html=True) # See https://discuss.streamlit.io/t/unable-to-center-table-cell-values-with-pandas-style-need-input-to-see-if-this-is-even-possible-with-streamlit/31852/2
                     with transcript_container:
                         annotated_text(display_annotated_transcripts(segments))
 
