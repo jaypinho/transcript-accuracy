@@ -173,19 +173,36 @@ def evaluate_alignment(alignments, current_alignment, min_words=0):
     elif current_alignment.type == 'delete':
         deletion_size = (current_alignment.ref_end_idx - current_alignment.ref_start_idx) - (current_alignment.hyp_end_idx - current_alignment.hyp_start_idx)
 
-    lower_word_count_in_section = min((current_alignment.ref_end_idx - current_alignment.ref_start_idx), (current_alignment.hyp_end_idx - current_alignment.hyp_start_idx))
-    modified_buffer = 0
-    if lower_word_count_in_section < min_words:
-        modified_buffer = min_words - lower_word_count_in_section
-        modified_buffer = math.ceil(modified_buffer / 2)
+    word_count_baseline = current_alignment.ref_end_idx - current_alignment.ref_start_idx
+    word_count_comparison = current_alignment.hyp_end_idx - current_alignment.hyp_start_idx
+
+    add_min_words_to_both = False
+    if (word_count_baseline < min_words or word_count_comparison < min_words) and st.session_state['only_add_adjacent_words_to_below_minimum'] == False:
+        add_min_words_to_both = True
+
+    modified_buffer_baseline = 0
+    modified_buffer_comparison = 0
+    if word_count_baseline < min_words:
+        modified_buffer_baseline = min_words - word_count_baseline
+        modified_buffer_baseline = math.ceil(modified_buffer_baseline / 2)
+    elif add_min_words_to_both:
+        modified_buffer_baseline = min_words - min(word_count_baseline, word_count_comparison)
+        modified_buffer_baseline = math.ceil(modified_buffer_baseline / 2)
+
+    if word_count_comparison < min_words:
+        modified_buffer_comparison = min_words - word_count_comparison
+        modified_buffer_comparison = math.ceil(modified_buffer_comparison / 2)
+    elif add_min_words_to_both:
+        modified_buffer_comparison =min_words - min(word_count_baseline, word_count_comparison)
+        modified_buffer_comparison = math.ceil(modified_buffer_comparison / 2)
 
     return {
         "baseline_snippet": " ".join(alignments.references[0][current_alignment.ref_start_idx:current_alignment.ref_end_idx]).strip(),
-        "baseline_snippet_pre": " ".join(alignments.references[0][max(current_alignment.ref_start_idx-modified_buffer, 0):current_alignment.ref_start_idx]).strip() if modified_buffer > 0 else None,
-        "baseline_snippet_post": " ".join(alignments.references[0][current_alignment.ref_end_idx:(current_alignment.ref_end_idx+modified_buffer)]).strip() if modified_buffer > 0 else None,
+        "baseline_snippet_pre": " ".join(alignments.references[0][max(current_alignment.ref_start_idx-modified_buffer_baseline, 0):current_alignment.ref_start_idx]).strip() if modified_buffer_baseline > 0 else None,
+        "baseline_snippet_post": " ".join(alignments.references[0][current_alignment.ref_end_idx:(current_alignment.ref_end_idx+modified_buffer_baseline)]).strip() if modified_buffer_baseline > 0 else None,
         "comparison_snippet": " ".join(alignments.hypotheses[0][current_alignment.hyp_start_idx:current_alignment.hyp_end_idx]).strip(),
-        "comparison_snippet_pre": " ".join(alignments.hypotheses[0][max(current_alignment.hyp_start_idx-modified_buffer, 0):current_alignment.hyp_start_idx]).strip() if modified_buffer > 0 else None,
-        "comparison_snippet_post": " ".join(alignments.hypotheses[0][current_alignment.hyp_end_idx:(current_alignment.hyp_end_idx+modified_buffer)]).strip() if modified_buffer > 0 else None,
+        "comparison_snippet_pre": " ".join(alignments.hypotheses[0][max(current_alignment.hyp_start_idx-modified_buffer_comparison, 0):current_alignment.hyp_start_idx]).strip() if modified_buffer_comparison > 0 else None,
+        "comparison_snippet_post": " ".join(alignments.hypotheses[0][current_alignment.hyp_end_idx:(current_alignment.hyp_end_idx+modified_buffer_comparison)]).strip() if modified_buffer_comparison > 0 else None,
         "substitution_size": substitution_size,
         "insertion_size": insertion_size,
         "deletion_size": deletion_size
@@ -329,6 +346,8 @@ def how_it_works():
         Conversely, an error section might be penalized with an unduly low semantic similarity score if insufficient neighboring words are co-embedded -- especially in a scenario where the context provided by those additional words would allow a human to trivially grasp the meaning of the incorrectly transcribed section. (Think about the relative likelihoods of someone understanding that a typo has occurred if they read <code>the car entered the house</code> vs. <code>the car entered the house and meowed loudly</code>.)
 
         One additional caveat to keep in mind with this minimum words setting: if two error sections are located extremely close to each other - say, <code>the *cat* entered the *house*</code> vs. <code>the *car* entered the *hose*</code> - then a high minimum words setting will cause the embedding for each error section to overlap with the other error section. This may artificially decrease the semantic similarity score for both error sections.
+
+        There is also an option to add adjacent words only to error sections that are below the minimum. This means that if, for example, the minimum words setting is 3 and the gold standard transcript error section has 1 word but the ASR one has 3, then 2 adjacent words would be included in the gold standard error section when comparing similarity, while the ASR error section would remain unmodified. Unchecking this box results in the same number of adjacent words being added to both transcripts\' error sections.
 
         Lastly, the minimum cosine similarity setting effectively squeezes the cosine similarity values into a smaller range. Empirically, OpenAI text embeddings appear to cluster fairly tightly into the 0.70 - 1.00 range, meaning that even words, phrases, or sentences with highly different semantic content nevertheless often achieve cosine similarity scores of 0.70 or higher. So the minimum threshold setting treats every cosine similarity below the specified value as fully dissimilar - in other words, all meaning in common between the two segments of an error section pair is assumed to be lost below that threshold, and the remaining portion of the range (above the minimum, and less than or equal to 1.0) represents the portion of information lost or preserved. 
 
@@ -487,8 +506,9 @@ def demo_streamlit_app():
                 st.checkbox('Remove extra spaces', value=True, key='normalize_remove_spaces', label_visibility="visible", help='Remove extra spaces between words before comparing')
                 st.write('**Minimum words options**')
                 st.slider('Minimum words in similarity comparison', min_value=1, max_value=10, value=2, key='min_words_in_similarity_comparison', label_visibility="visible", help='Select the minimum number of words in either transcript to include when evaluating semantic similarity between *differing* sections (adjacent words will be incorporated if either of the two transcripts\' error sections is below the minimum)')
+                st.checkbox('Only add adjacent words to error section(s) below the minimum', value=True, key='only_add_adjacent_words_to_below_minimum', label_visibility="visible", help='If only one transcript\'s error section has fewer than the minimum words, include its adjacent words when calculating similarity, but leave the other transcript\'s error section unchanged')
                 st.caption("Error sections - words, phrases, or sentences where the two transcripts differ - may at times contain blank text in one of the transcripts. (For example, if one transcript states 'She walked to the office' and the second transcript states 'She walked to office', the error section for the second transcript would be blank, as the word 'the' is not present.) In this scenario, because an empty text string cannot be vector-embedded or compared to the embedding of another string, it is necessary to include surrounding words to ensure that the context of the differing sections is accounted for when determining semantic similarity.")
-                st.write('**MinimumcCosine similarity options**')
+                st.write('**Minimum cosine similarity options**')
                 st.slider('Minimum cosine similarity threshold', min_value=0.0, max_value=1.0, value=0.70, step=0.01, key='minimum_similarity', label_visibility="visible", help='Select the cosine similarity threshold value below which an error section should be considered fully semantically different from the corresponding section in the gold standard transcript')
                 st.caption("Although the technical range of cosine similarity is -1 to 1, in practice most word, phrase, and sentence pairs embedded by OpenAI's 'text-embedding-ada-002' model from corresponding transcripts have a cosine similarity between approximately 0.70 and 1.")
 
