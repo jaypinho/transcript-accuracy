@@ -16,6 +16,7 @@ import openai
 from openai.embeddings_utils import cosine_similarity
 import pandas as pd
 import math
+from sklearn.decomposition import PCA
 
 
 # INPUT: A YouTube video ID
@@ -150,6 +151,8 @@ def compare_texts(baseline, comparison, model='jiwer', min_words=5):
         embedding_similarities = get_embedding_similarities(snippet_pairs)
         for similarity in embedding_similarities:
             grouped_segments[similarity['segment_index']]['cosine_similarity'] = calculate_modified_similarity(similarity['cosine_similarity'])
+            grouped_segments[similarity['segment_index']]['baseline_embedding'] = similarity['baseline_embedding']
+            grouped_segments[similarity['segment_index']]['comparison_embedding'] = similarity['comparison_embedding']
         return {
             'grouped_segments': grouped_segments,
             'alignments': alignments
@@ -257,7 +260,9 @@ def get_embedding_similarities(snippet_pairs):
     for idx, pair in enumerate(embedding_pairs):
         snippet_pairs[idx] = {
             'segment_index': snippet_pairs[idx][2],
-            'cosine_similarity': cosine_similarity(pair[0], pair[1])
+            'cosine_similarity': cosine_similarity(pair[0], pair[1]),
+            'baseline_embedding': pair[0],
+            'comparison_embedding': pair[1]
         }
     return snippet_pairs
 
@@ -317,6 +322,49 @@ def calculate_modified_similarity(similarity):
         return 0.0
     else:
         return (similarity - st.session_state['minimum_similarity']) / (1 - st.session_state['minimum_similarity'])
+
+
+def transform_embeddings_into_3d(segments):
+
+    embeddings = sum([[x['baseline_embedding'], x['comparison_embedding']] for x in segments], [])
+    pca = PCA(n_components=3)
+    embeddings_3d = pca.fit_transform(embeddings)
+
+    modified_segments = []
+    for i, segment in enumerate(segments):
+        modified_segments.append(segment)
+        modified_segments[-1]['baseline_embedding_3d'] = embeddings_3d[2*i].tolist()
+        modified_segments[-1]['comparison_embedding_3d'] = embeddings_3d[(2*i)+1].tolist()
+
+    return modified_segments
+
+
+def create_dataframe_for_graph(segments):
+
+    new_segments = []
+
+    for i, segment in enumerate(segments):
+
+        baseline_embedding = segment['baseline_embedding_3d']
+        comparison_embedding = segment['comparison_embedding_3d']
+
+        current_segment = dict(segment)
+        current_segment['x'] = baseline_embedding[0]
+        current_segment['y'] = baseline_embedding[1]
+        current_segment['z'] = baseline_embedding[2]
+        current_segment['text'] = segment['baseline_snippet_buffered']
+        current_segment['pair_index'] = i
+        new_segments.append(current_segment)
+
+        current_segment2 = dict(segment)
+        current_segment2['x'] = comparison_embedding[0]
+        current_segment2['y'] = comparison_embedding[1]
+        current_segment2['z'] = comparison_embedding[2]
+        current_segment2['text'] = segment['comparison_snippet_buffered']
+        current_segment2['pair_index'] = i
+        new_segments.append(current_segment2)
+
+    return new_segments
 
 
 def how_it_works():
@@ -549,7 +597,6 @@ def demo_streamlit_app():
                 with st.spinner('Comparing the transcripts...'):
 
                     segments = compare_texts(normalized_text1, normalized_text2, model='jiwer', min_words=st.session_state['min_words_in_similarity_comparison'])
-                    all_errors = [x for x in segments['grouped_segments'] if 'cosine_similarity' in x]
 
                     substitutions = sum([x['substitution_size'] * (1 - x['cosine_similarity']) for x in segments['grouped_segments'] if 'cosine_similarity' in x])
                     insertions = sum([x['insertion_size'] * (1 - x['cosine_similarity']) for x in segments['grouped_segments'] if 'cosine_similarity' in x])
@@ -561,10 +608,22 @@ def demo_streamlit_app():
                     col2.metric(label="WER", value=f"{round(segments['alignments'].wer*100,2)}%", help="Word Error Rate - (substitutions + insertions + deletions) / total words")
                     col3.metric(label="Distinct Error Sections", value=f"{len([x for x in segments['grouped_segments'] if 'cosine_similarity' in x])}", help="Number of distinct sections of the transcript containing one or more consecutive errors")
                     col4.metric(label="Semantic WER", value=f"{round(semantic_wer*100, 2)}%", help="The semantic-adjusted Word Error Rate, in which the difference between the semantic meanings in each error section pair is multiplied by the number of error words in that section")
-                    worst_offenders = [{'Gold Standard': f"{str(x['baseline_snippet_pre'] or '')} <strong style='color:red;'>{x['baseline_snippet']}</strong> {str(x['baseline_snippet_post'] or '')}", 'Error Section': f"{str(x['comparison_snippet_pre'] or '')} <strong style='color:red;'>{x['comparison_snippet']}</strong> {str(x['comparison_snippet_post'] or '')}", 'Similarity Score': x['cosine_similarity']} for x in sorted(all_errors, key=lambda x: x['cosine_similarity'])[:20]]
+
+                    segments_with_3d = transform_embeddings_into_3d([x for x in segments['grouped_segments'] if 'baseline_embedding' in x])
+                    worst_offenders_raw_data = sorted(segments_with_3d, key=lambda x: x['cosine_similarity'])[:20]
+                    graph_embeddings = create_dataframe_for_graph(worst_offenders_raw_data)
+                    
+                    worst_offenders = [{'Gold Standard': f"{str(x['baseline_snippet_pre'] or '')} <strong style='color:red;'>{x['baseline_snippet']}</strong> {str(x['baseline_snippet_post'] or '')}", 'Error Section': f"{str(x['comparison_snippet_pre'] or '')} <strong style='color:red;'>{x['comparison_snippet']}</strong> {str(x['comparison_snippet_post'] or '')}", 'Similarity Score': x['cosine_similarity']} for x in worst_offenders_raw_data]
                     df = pd.DataFrame.from_dict(worst_offenders)
                     with worst_offenders_container:
                         st.markdown(df.style.format({'Similarity Score': '{:.3f}'}).to_html(),unsafe_allow_html=True) # See https://discuss.streamlit.io/t/unable-to-center-table-cell-values-with-pandas-style-need-input-to-see-if-this-is-even-possible-with-streamlit/31852/2
+
+                        import plotly.express as px
+                        df = pd.DataFrame(graph_embeddings)
+                        fig = px.line_3d(df, x='x', y='y', z='z', color='pair_index', hover_data=['text'], height=800, title='Error Section Pairs (3-D Embeddings)').update_traces(mode="lines+markers")
+                        fig.update_layout(coloraxis_showscale=False, showlegend=False)
+                        st.plotly_chart(fig, theme=None, use_container_width=True)
+
                     with transcript_container:
                         annotated_text(display_annotated_transcripts(segments))
 
