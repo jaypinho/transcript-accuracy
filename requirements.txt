@@ -6,7 +6,7 @@ jiwer==3.0.2
 num2words==0.5.12
 openai==0.27.8
 openai-whisper==20240930
-pandas==2.0.3
+pandas==2.2.3
 matplotlib==3.9.4
 plotly==6.1.1
 scikit-learn==1.6.0
